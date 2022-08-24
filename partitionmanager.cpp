@@ -305,6 +305,8 @@ void TWPartitionManager::Setup_Fstab_Partitions(bool Display_Error) {
 				Prepare_Super_Volume((*iter));
 		}
 
+		Unlock_Block_Partitions();
+
 		//Setup Apex before decryption
 		TWPartition* sys = PartitionManager.Find_Partition_By_Path(PartitionManager.Get_Android_Root_Path());
 		TWPartition* ven = PartitionManager.Find_Partition_By_Path("/vendor");
@@ -1857,29 +1859,29 @@ void TWPartitionManager::Parse_Users() {
 
 			// Attempt to get name of user. Fallback to user ID if this fails.
 			std::string path = "/data/system/users/" + to_string(userId) + ".xml";
-			if ((atoi(TWFunc::System_Property_Get("ro.build.version.sdk").c_str()) > 30) && TWFunc::Path_Exists(path)) {
-				if(!TWFunc::Check_Xml_Format(path))
-					user.userName = to_string(userId);
+			if (!TWFunc::Check_Xml_Format(path)) {
+				string oldpath = path;
+				if (TWFunc::abx_to_xml(oldpath, path)) {
+					LOGINFO("Android 12+: '%s' has been converted into plain text xml (for user %s).\n", oldpath.c_str(), user.userId.c_str());
+				}
+			}
+			char* userFile = PageManager::LoadFileToBuffer(path, NULL);
+			if (userFile == NULL) {
+				user.userName = to_string(userId);
 			}
 			else {
-				char* userFile = PageManager::LoadFileToBuffer(path, NULL);
-				if (userFile == NULL) {
+				xml_document<> *userXml = new xml_document<>();
+				userXml->parse<0>(userFile);
+				xml_node<>* userNode = userXml->first_node("user");
+				if (userNode == nullptr) {
 					user.userName = to_string(userId);
-				}
-				else {
-					xml_document<> *userXml = new xml_document<>();
-					userXml->parse<0>(userFile);
-					xml_node<>* userNode = userXml->first_node("user");
-					if (userNode == nullptr) {
+				} else {
+					xml_node<>* nameNode = userNode->first_node("name");
+					if (nameNode == nullptr)
 						user.userName = to_string(userId);
-					} else {
-						xml_node<>* nameNode = userNode->first_node("name");
-						if (nameNode == nullptr)
-							user.userName = to_string(userId);
-						else {
-							string userName = nameNode->value();
-							user.userName = userName + " (" + to_string(userId) + ")";
-						}
+					else {
+						string userName = nameNode->value();
+						user.userName = userName + " (" + to_string(userId) + ")";
 					}
 				}
 			}
@@ -2847,8 +2849,6 @@ bool TWPartitionManager::Flash_Image(string& path, string& filename) {
 
 	full_filename = path + "/" + filename;
 
-	Unlock_Block_Partitions();
-
 	gui_msg("image_flash_start=[IMAGE FLASH STARTED]");
 	gui_msg(Msg("img_to_flash=Image to flash: '{1}'")(full_filename));
 
@@ -3016,17 +3016,16 @@ bool TWPartitionManager::Decrypt_Adopted() {
 		return false;
 	}
 
-	// In Android 12 xml format changed. Previously it was human-readable format with xml tags
-	// now it's ABX (Android Binary Xml). Sadly, rapidxml can't parse it, so check xml format firstly
 	std::string path = "/data/system/storage.xml";
-	if ((atoi(TWFunc::System_Property_Get("ro.build.version.sdk").c_str()) > 30) && TWFunc::Path_Exists(path))
-		if(!TWFunc::Check_Xml_Format(path)) {
-			LOGINFO("Android 12+: storage.xml is in ABX format. Skipping adopted storage decryption\n");
-			return false;
+	if (!TWFunc::Check_Xml_Format(path)) {
+		std::string oldpath = path;
+		if (TWFunc::abx_to_xml(oldpath, path)) {
+			LOGINFO("Android 12+: '%s' has been converted into plain text xml (%s).\n", oldpath.c_str(), path.c_str());
 		}
+	}
 
 	LOGINFO("Decrypt adopted storage starting\n");
-	char* xmlFile = PageManager::LoadFileToBuffer("/data/system/storage.xml", NULL);
+	char* xmlFile = PageManager::LoadFileToBuffer(path, NULL);
 	xml_document<> *doc = NULL;
 	xml_node<>* volumes = NULL;
 	string Primary_Storage_UUID = "";
@@ -3429,11 +3428,12 @@ bool TWPartitionManager::Prepare_Super_Volume(TWPartition* twrpPart) {
 
 	twrpPart->Set_Block_Device(fstabEntry.blk_device);
 	twrpPart->Update_Size(true);
-	twrpPart->Change_Mount_Read_Only(true);
 	twrpPart->Set_Can_Be_Backed_Up(false);
 	twrpPart->Set_Can_Be_Wiped(false);
-	LOGINFO("Symlinking %s => /dev/block/bootdevice/by-name/%s \n", fstabEntry.blk_device.c_str(), bare_partition_name.c_str());
-	symlink(fstabEntry.blk_device.c_str(), ("/dev/block/bootdevice/by-name/" + bare_partition_name).c_str());
+	if (access(("/dev/block/bootdevice/by-name/" + bare_partition_name).c_str(), F_OK) == -1) {
+		LOGINFO("Symlinking %s => /dev/block/bootdevice/by-name/%s \n", fstabEntry.blk_device.c_str(), bare_partition_name.c_str());
+		symlink(fstabEntry.blk_device.c_str(), ("/dev/block/bootdevice/by-name/" + bare_partition_name).c_str());
+	}
 
     return true;
 }
@@ -3564,7 +3564,7 @@ void TWPartitionManager::Unlock_Block_Partitions() {
 					continue;
 				}
 				if (ioctl(fd, BLKROSET, &OFF) == -1) {
-					LOGERR("Unable to unlock %s for flashing: %s\n", block_device.c_str());
+					LOGERR("Unable to unlock %s: %s\n", block_device.c_str());
 					continue;
 				}
 				close(fd);

@@ -146,7 +146,6 @@ ifeq ($(TW_OEM_BUILD),true)
     TW_EXCLUDE_TZDATA := true
     TW_EXCLUDE_NANO := true
     TW_EXCLUDE_BASH := true
-    TW_EXCLUDE_PYTHON := true
 endif
 
 ifeq ($(AB_OTA_UPDATER),true)
@@ -431,12 +430,16 @@ endif
 ifneq ($(TARGET_OTA_ASSERT_DEVICE),)
     LOCAL_CFLAGS += -DTARGET_OTA_ASSERT_DEVICE='"$(TARGET_OTA_ASSERT_DEVICE)"'
 endif
+ifneq ($(TW_BACKUP_EXCLUSIONS),)
+	LOCAL_CFLAGS += -DTW_BACKUP_EXCLUSIONS='"$(TW_BACKUP_EXCLUSIONS)"'
+endif
 
 LOCAL_C_INCLUDES += system/vold \
 
 TWRP_REQUIRED_MODULES += \
     relink_libraries \
     relink_binaries \
+    relink_vendor_hw_binaries \
     twrp_ramdisk \
     bc \
     dump_image \
@@ -588,7 +591,7 @@ endif
 ifneq ($(TW_LOAD_VENDOR_MODULES),)
     TWRP_REQUIRED_MODULES += libmodprobe
 endif
-ifneq ($(TW_EXCLUDE_PYTHON),true)
+ifeq ($(TW_INCLUDE_PYTHON),true)
     TWRP_REQUIRED_MODULES += python3_twrp
 endif
 
